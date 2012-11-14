@@ -82,7 +82,9 @@ enum privsep_opcode {
     privsep_op_statefile_completed
 };
 
+#ifndef NXENSTORE
 static void _write_port_to_xenstore(char *xenstore_path, char *type, int port);
+#endif
 
 int
 set_fd_handler(int fd, int (*fd_read_poll)(void *), void (*fd_read)(void *),
@@ -468,6 +470,7 @@ must_read(int fd, void *buf, size_t n)
     }
 }
 
+#ifndef NXENSTORE
 /* Write data with the assertion that it all has to be written, or
  * else abort the process.  Based on atomicio() from openssh. */
 static void
@@ -489,7 +492,9 @@ must_write(int fd, const void *buf, size_t n)
         }
     }
 }
+#endif
 
+#ifndef NXENSTORE
 static void xenstore_write_statefile(const char *filepath)
 {
     int ret;
@@ -542,6 +547,7 @@ static void privsep_statefile_completed(const char *name)
     must_write(privsep_fd, &l, sizeof(l));
     must_write(privsep_fd, name, l);
 }
+#endif
 
 static void sigxfsz_handler(int num)
 {
@@ -922,9 +928,11 @@ main(int argc, char **argv, char **envp)
             while (1) {
                 must_read(parent_fd, &opcode, sizeof(opcode));
                 switch (opcode) {
+#ifndef NXENSTORE
                 case privsep_op_statefile_completed:
                     privsep_xenstore_statefile();
                     break;
+#endif
                 default:
                     clean_exit(0);
                 }
@@ -936,7 +944,9 @@ main(int argc, char **argv, char **envp)
 
             close(socks[1]);
             privsep_fd = socks[0];
+#ifndef NXENSTORE
             xs_daemon_close(xs);
+#endif
 
             rlim.rlim_cur = 64 * 1024 * 1024;
             rlim.rlim_max = 64 * 1024 * 1024 + 64;
@@ -1146,6 +1156,7 @@ main(int argc, char **argv, char **envp)
     return 0;
 }
 
+#ifndef NXENSTORE
 static void _write_port_to_xenstore(char *xenstore_path, char *type, int no)
 {
     char *path, *port;
@@ -1163,3 +1174,4 @@ static void _write_port_to_xenstore(char *xenstore_path, char *type, int no)
     if (!ret)
         err(1, "xs_write");
 }
+#endif
