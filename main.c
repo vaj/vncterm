@@ -83,7 +83,8 @@ enum privsep_opcode {
 };
 
 #ifndef NXENSTORE
-static void _write_port_to_xenstore(char *xenstore_path, char *type, int port);
+static void _write_port_to_xenstore(char *xenstore_path, const char *type,
+    int port);
 #endif
 
 int
@@ -433,6 +434,7 @@ static uid_t vncterm_uid;
 #ifndef NXENSTORE
 struct xs_handle *xs = NULL;
 char *xenstore_path = NULL;
+const char *vncname = "vnc";
 #endif
 
 static void clean_exit(int ret)
@@ -645,6 +647,7 @@ main(int argc, char **argv, char **envp)
 	    {"xenstore", 1, 0, 'x'},
 	    {"vnclisten", 1, 0, 'v'},
 	    {"vncpassword", 1, 0, 'P'},
+	    {"vncname", 1, 0, 'n'},
         {"stay-root", 0, 0, 'S'},
         {"vncviewer", 2, 0, 'V'},
             {"loadstate", 1, 0, 'l'},
@@ -652,7 +655,7 @@ main(int argc, char **argv, char **envp)
 	    {0, 0, 0, 0}
 	};
 
-	c = getopt_long(argc, argv, "+cp:rst:x:v:P:SV::l:T", long_options,
+	c = getopt_long(argc, argv, "+cp:rst:x:v:P:n:SV::l:T", long_options,
 	    NULL);
 	if (c == -1)
 	    break;
@@ -693,6 +696,9 @@ main(int argc, char **argv, char **envp)
 	    break;
 	case 'P':
 	    strncpy(vncpasswd, optarg, sizeof(vncpasswd) - 1);
+	    break;
+	case 'n':
+	    vncname = strdup(optarg);
 	    break;
 	case 'V':
 	    vncviewer = 1;
@@ -848,7 +854,7 @@ main(int argc, char **argv, char **envp)
 	if (xs == NULL)
 	    err(1, "xs_daemon_open");
 
-        _write_port_to_xenstore(xenstore_path, "vnc", display);
+        _write_port_to_xenstore(xenstore_path, vncname, display);
         if (enable_textterm)
             _write_port_to_xenstore(xenstore_path, "tc", text_display);
 
@@ -1162,7 +1168,8 @@ main(int argc, char **argv, char **envp)
 }
 
 #ifndef NXENSTORE
-static void _write_port_to_xenstore(char *xenstore_path, char *type, int no)
+static void _write_port_to_xenstore(char *xenstore_path, const char *type,
+    int no)
 {
     char *path, *port;
     int ret;
