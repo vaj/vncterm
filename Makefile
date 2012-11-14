@@ -13,6 +13,9 @@ CFLAGS += -Wall -Werror -g -O1
 ifeq ($(shell uname),Linux)
 LDLIBS := -lutil
 endif
+ifeq ($(shell uname),NetBSD)
+LDLIBS := -lutil
+endif
 
 ifndef WITHOUT_XENSTORE
 LDLIBS += -lxenstore
@@ -45,7 +48,7 @@ $(LIBS): %.a: ALWAYS
 .PHONY: ALWAYS
 
 clean:
-	$(foreach dir,$(SUBDIRS),make -C $(dir) clean)
+	$(foreach dir,$(SUBDIRS),$(MAKE) -C $(dir) clean)
 	rm -f $(OBJS)
 	rm -f $(DEPS)
 	rm -f $(TARGET)

@@ -3,7 +3,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <netinet/in.h>
-#if !defined(__APPLE__)
+#if defined(__linux__)
 #include <pty.h>
 #else
 #include <util.h>
@@ -23,7 +23,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
+#if defined(__linux__)
 #include <sys/prctl.h>
+#endif
 
 #include <locale.h>
 
@@ -953,7 +956,9 @@ main(int argc, char **argv, char **envp)
             setuid(vncterm_uid);
 
             /* vncterm core dumps are often useful; make sure they're allowed. */
+#if defined(__linux__)
             prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+#endif
 
             /* handling SIGXFSZ */
             signal(SIGXFSZ, sigxfsz_handler);
