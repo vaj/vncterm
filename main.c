@@ -644,6 +644,7 @@ main(int argc, char **argv, char **envp)
 	    {"title", 1, 0, 't'},
 	    {"xenstore", 1, 0, 'x'},
 	    {"vnclisten", 1, 0, 'v'},
+	    {"vncpassword", 1, 0, 'P'},
         {"stay-root", 0, 0, 'S'},
         {"vncviewer", 2, 0, 'V'},
             {"loadstate", 1, 0, 'l'},
@@ -651,7 +652,8 @@ main(int argc, char **argv, char **envp)
 	    {0, 0, 0, 0}
 	};
 
-	c = getopt_long(argc, argv, "+cp:rst:x:v:SV::l:T", long_options, NULL);
+	c = getopt_long(argc, argv, "+cp:rst:x:v:P:SV::l:T", long_options,
+	    NULL);
 	if (c == -1)
 	    break;
 
@@ -688,6 +690,9 @@ main(int argc, char **argv, char **envp)
 	    break;
 	case 'v':
 	    vnclisten = strdup(optarg);
+	    break;
+	case 'P':
+	    strncpy(vncpasswd, optarg, sizeof(vncpasswd) - 1);
 	    break;
 	case 'V':
 	    vncviewer = 1;
