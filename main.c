@@ -87,9 +87,8 @@ static void _write_port_to_xenstore(char *xenstore_path, const char *type,
     int port);
 #endif
 
-int
-set_fd_handler(int fd, int (*fd_read_poll)(void *), void (*fd_read)(void *),
-	       void (*fd_write)(void *), void *opaque)
+static struct iohandler **
+find_fd_handler(int fd)
 {
     struct iohandler **pioh = &iohandlers;
 
@@ -98,6 +97,15 @@ set_fd_handler(int fd, int (*fd_read_poll)(void *), void (*fd_read)(void *),
 	    break;
 	pioh = &(*pioh)->next;
     }
+    return pioh;
+}
+
+int
+set_fd_handler(int fd, int (*fd_read_poll)(void *), void (*fd_read)(void *),
+	       void (*fd_write)(void *), void *opaque)
+{
+    struct iohandler **pioh = find_fd_handler(fd);
+
     if (*pioh == NULL) {
 	*pioh = calloc(1, sizeof(struct iohandler));
 	if (*pioh == NULL)
@@ -120,17 +128,22 @@ set_fd_handler(int fd, int (*fd_read_poll)(void *), void (*fd_read)(void *),
 int
 set_fd_error_handler(int fd, void (*fd_error)(void *))
 {
-    struct iohandler **pioh = &iohandlers;
+    struct iohandler **pioh = find_fd_handler(fd);
 
-    while (*pioh) {
-	if ((*pioh)->fd == fd)
-	    break;
-	pioh = &(*pioh)->next;
-    }
     if (*pioh == NULL)
 	return 1;
     (*pioh)->fd_error = fd_error;
     return 0;
+}
+
+static void
+enable_fd_handler(int fd)
+{
+    struct iohandler **pioh = find_fd_handler(fd);
+
+    if (*pioh == NULL)
+	err(1, "enable_fd_handler");
+    (*pioh)->enabled = 1;
 }
 
 struct timer {
@@ -343,18 +356,26 @@ pty_read(void *opaque)
     }
 }
 
+static int
+open_pty(const char *pty_path)
+{
+    int ptyfd = open(pty_path, O_RDWR | O_NOCTTY);
+    if (ptyfd == -1)
+	err(1, "open");
+    return ptyfd;
+}
+
 static struct pty *
-connect_pty(char *pty_path, CharDriverState *console, TextDisplayState *tds)
+connect_pty(int fd, CharDriverState *console, TextDisplayState *tds)
 {
     struct pty *pty;
 
     pty = malloc(sizeof(struct pty));
     if (pty == NULL)
 	err(1, "malloc");
+    pty->fd = fd;
     /* Only called at start of day, so doesn't need privsep */
-    pty->fd = open(pty_path, O_RDWR | O_NOCTTY);
-    if (pty->fd == -1)
-	err(1, "open");
+    /* XXX ... unless reconnect */
     pty->console = console;
     pty->tds = tds;
 
@@ -373,15 +394,16 @@ struct vncterm
 };
 
 #ifndef NXENSTORE
-void
+int
 read_xs_watch(struct xs_handle *xs, struct vncterm *vncterm)
 {
     char **vec, *pty_path = NULL;
     unsigned int num;
+    int fd = -1;
 
     vec = xs_read_watch(xs, &num);
     if (vec == NULL)
-	return;
+	return -1;
 
     if (strcmp(vncterm->xenstore_path, vec[XS_WATCH_PATH]))
 	goto out;
@@ -390,13 +412,12 @@ read_xs_watch(struct xs_handle *xs, struct vncterm *vncterm)
     if (pty_path == NULL)
 	goto out;
 
-    vncterm->pty = connect_pty(pty_path, vncterm->console, vncterm->tds);
-
-    xs_unwatch(xs, vncterm->xenstore_path, "tty");
+    fd = open_pty(pty_path);
 
  out:
     free(pty_path);
     free(vec);
+    return fd;
 }
 #endif
 
@@ -626,6 +647,7 @@ main(int argc, char **argv, char **envp)
 
 #ifdef USE_POLL
     struct pollfd *pollfds = NULL;
+    struct pollfd *xs_pollfd = NULL;
     int max_pollfds = 0;
 #else
     fd_set rdset, wrset, exset, rdset_m, wrset_m, exset_m;
@@ -867,8 +889,13 @@ main(int argc, char **argv, char **envp)
 	    if (!ret)
 		err(1, "xs_watch");
 
-            while (vncterm->pty == NULL)
-                read_xs_watch(xs, vncterm);
+            while (vncterm->pty == NULL) {
+                int fd = read_xs_watch(xs, vncterm);
+		if (fd != -1) {
+		    vncterm->pty = connect_pty(fd, vncterm->console,
+		      vncterm->tds);
+		}
+            }
 	}
     }
     else /* fallthrough */
@@ -904,8 +931,10 @@ main(int argc, char **argv, char **envp)
         stay_root = 1;
     }
 
-    if (pty_path)
-	vncterm->pty = connect_pty(pty_path, vncterm->console, vncterm->tds);
+    if (pty_path) {
+	int fd = open_pty(pty_path);
+	vncterm->pty = connect_pty(fd, vncterm->console, vncterm->tds);
+    }
 
     if (stay_root) {
         /* warnx("not dropping root privileges"); */
@@ -1037,9 +1066,9 @@ main(int argc, char **argv, char **envp)
 
 	if (handlers_updated) {
 #ifdef USE_POLL
-	    if (nr_handlers > max_pollfds) {
+	    if (nr_handlers + 1 > max_pollfds) {
 		free(pollfds);
-		pollfds = malloc(nr_handlers * sizeof(struct pollfd));
+		pollfds = malloc((nr_handlers + 1) * sizeof(struct pollfd));
 		if (pollfds == NULL)
 		    err(1, "malloc");
 		max_pollfds = nr_handlers;
@@ -1057,7 +1086,12 @@ main(int argc, char **argv, char **envp)
 		ioh->pollfd = &pollfds[nfds];
 		nfds++;
 	    }
+	    xs_pollfd = &pollfds[nfds];
+	    xs_pollfd->fd = xs_fileno(xs);
+	    xs_pollfd->events = POLLIN|POLLERR|POLLHUP;
+	    nfds++;
 #else
+#error unimplemented
 	    FD_ZERO(&rdset_m);
 	    FD_ZERO(&wrset_m);
 	    FD_ZERO(&exset_m);
@@ -1143,7 +1177,8 @@ main(int argc, char **argv, char **envp)
 		    continue;
 		if (revents & (POLLERR|POLLHUP|POLLNVAL)) {
 		    if (ioh->fd == console_input_fd(vncterm->console)) {
-                ds->dpy_close_vncviewer_connections(ds);
+			fprintf(stderr, "inputfd %d error\n", ioh->fd);
+//                ds->dpy_close_vncviewer_connections(ds);
 			if (restart)
 			    restart_needed = 1;
 			else if (exit_on_eof)
@@ -1160,6 +1195,36 @@ main(int argc, char **argv, char **envp)
 		    ioh->fd_write(ioh->opaque);
 		if (revents & POLLIN && ioh->fd_read)
 		    ioh->fd_read(ioh->opaque);
+	    }
+	    if (xs_pollfd->revents) {
+                int fd;
+		int flags;
+
+		fprintf(stderr, "xs got event %u\n", xs_pollfd->revents);
+		/* XXX should timeout? */
+		while ((fd = read_xs_watch(xs, vncterm)) == -1) {
+		}
+		fprintf(stderr, "new fd %d old %d\n", fd, vncterm->pty->fd);
+		/*
+		 * keep the descriptor number unchanged because we don't want
+		 * to update its copies in various places.  pty->fd, ioh->fd,
+		 * ts->ssock, ...
+		 */
+		flags = fcntl(fd, F_GETFL, 0);
+		if (flags == -1) {
+		    err(1, "F_GETFL");
+		}
+		if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+		    err(1, "F_SETFL O_NONBLOCK");
+		}
+		if (dup2(fd, vncterm->pty->fd) == -1) {
+		    err(1, "dup2");
+		}
+		if (close(fd) == -1) {
+		    warn("close");
+		}
+		enable_fd_handler(vncterm->pty->fd);
+		handlers_updated = 1;
 	    }
 	}
     }
